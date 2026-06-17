@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Main Cases collection
+    match /cases/{caseId} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null && isValidCaseId(caseId) && isValidCase(request.resource.data);
+      allow delete: if request.auth != null && isValidCaseId(caseId);
+    }
+
+    // Registered users
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // System configurations & setup registry
+    match /system/{docId} {
+      allow read, write: if docId is string && docId.size() <= 64;
+    }
+
+    // Helper validation functions
+    function isValidCaseId(cid) {
+      return cid is string && cid.size() <= 128;
+    }
+
+    function isValidCase(data) {
+      return data.id is string
+        && data.id.size() <= 128
+        && data.caseInfo is map
+        && data.caseInfo.taxpayerName is string
+        && data.financialInfo is map
+        && data.proceedingsInfo is map
+        && data.outcomeInfo is map;
+    }
+  }
+}

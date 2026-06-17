@@ -1,0 +1,6 @@
+{
+  "name": "Tax Litigation Management Assistant",
+  "description": "An AI-powered litigation document analyzer and master register for textile companies, FBR, PRA, Customs, and Income Tax matters.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
