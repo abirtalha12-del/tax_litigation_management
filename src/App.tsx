@@ -6,14 +6,13 @@ import Uploader from "./components/Uploader";
 import CaseRegister from "./components/CaseRegister";
 import SheetsViewer from "./components/SheetsViewer";
 import CaseDetailModal from "./components/CaseDetailModal";
-import { Briefcase, FileText, Landmark, LayoutDashboard, Calendar, Search, Trash, Edit2, CheckCircle2, AlertTriangle, ShieldCheck, Clock, PlusCircle, LogOut } from "lucide-react";
-import { collection, onSnapshot, doc, setDoc, deleteDoc, getDoc } from "firebase/firestore";
-import { onAuthStateChanged, signOut } from "firebase/auth";
-import { db, auth, handleFirestoreError, OperationType } from "./lib/firebase";
+import SettingsPanel from "./components/SettingsPanel";
+import { Briefcase, FileText, Landmark, LayoutDashboard, Calendar, Search, Trash, Edit2, CheckCircle2, AlertTriangle, ShieldCheck, Clock, PlusCircle, LogOut, Sliders } from "lucide-react";
+import { useQuery, useMutation } from "./lib/convex";
+import { api } from "../convex/_generated/api";
 import AuthScreen from "./components/AuthScreen";
 
 export default function App() {
-  const [cases, setCases] = useState<LitigationCase[]>([]);
   const [activeTab, setActiveTab] = useState<string>("dashboard");
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [editingCase, setEditingCase] = useState<LitigationCase | null>(null);
@@ -21,113 +20,83 @@ export default function App() {
 
   // Auth States
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const [userProfile, setUserProfile] = useState<{ role: "admin" | "user"; fullName: string } | null>(null);
+  const [userProfile, setUserProfile] = useState<{ role: "owner" | "admin" | "user"; fullName: string } | null>(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
 
-  // Subscribe to Authentication State
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        setCurrentUser(firebaseUser);
-        try {
-          const profileDoc = await getDoc(doc(db, "users", firebaseUser.uid));
-          if (profileDoc.exists()) {
-            const data = profileDoc.data();
-            setUserProfile({
-              role: data.role || "user",
-              fullName: data.fullName || firebaseUser.displayName || "Authorized Counsel"
-            });
-          } else {
-            // Default baseline profile
-            setUserProfile({
-              role: "user",
-              fullName: firebaseUser.displayName || "Authorized Counsel"
-            });
-          }
-        } catch (error) {
-          console.error("Failed to fetch user profile:", error);
-          setUserProfile({
-            role: "user",
-            fullName: firebaseUser.displayName || "Authorized Counsel"
-          });
-        }
-      } else {
-        // Check local development/demo bypass as a fallback
-        const cachedBypass = localStorage.getItem("mills_counsel_bypass");
-        if (cachedBypass) {
-          try {
-            const parsed = JSON.parse(cachedBypass);
-            setCurrentUser(parsed.user);
-            setUserProfile(parsed.profile);
-          } catch (e) {
-            setCurrentUser(null);
-            setUserProfile(null);
-          }
-        } else {
-          setCurrentUser(null);
-          setUserProfile(null);
-        }
-      }
-      setLoadingAuth(false);
-    });
-    return () => unsubscribe();
-  }, []);
+  // Nice Toast & Confirm States for non-blocking browser sandbox compliance
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastType, setToastType] = useState<"success" | "error" | "info">("info");
+  const [confirmDialog, setConfirmDialog] = useState<{
+    message: string;
+    description?: string;
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
 
-  // Real-time Firestore synchronizer
-  useEffect(() => {
-    const unsub = onSnapshot(
-      collection(db, "cases"),
-      (snapshot) => {
-        const loadedCases: LitigationCase[] = [];
-        snapshot.forEach((d) => {
-          loadedCases.push(d.data() as LitigationCase);
-        });
-
-        // Sort cases by updatedAt desc
-        loadedCases.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-        setCases(loadedCases);
-      },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, "cases");
-      }
-    );
-    return () => unsub();
-  }, []);
-
-  // One-time startup database checker and initial seeder
-  useEffect(() => {
-    const checkAndSeed = async () => {
-      try {
-        const setupDoc = await getDoc(doc(db, "system", "setup"));
-        if (!setupDoc.exists()) {
-          // If no setup marker is found in the database, do a first-time populate
-          for (const c of initialCases) {
-            await setDoc(doc(db, "cases", c.id), c);
-          }
-          await setDoc(doc(db, "system", "setup"), { seeded: true });
-        }
-      } catch (err) {
-        console.error("Failed checking setup or seeding default data:", err);
-      }
-    };
-    checkAndSeed();
-  }, []);
-
-  const handleAuthSuccess = (user: any, profile: { role: "admin" | "user"; fullName: string }) => {
-    setCurrentUser(user);
-    setUserProfile(profile);
+  const showToast = (message: string, type: "success" | "error" | "info" = "info") => {
+    setToastMessage(message);
+    setToastType(type);
+    setTimeout(() => {
+      setToastMessage((curr) => curr === message ? null : curr);
+    }, 4500);
   };
 
-  // Filter cases visible to standard users (they see pre-seeded cases and cases they authored)
-  const filteredCases = cases.filter((c) => {
-    if (!currentUser || !userProfile) return false;
-    if (userProfile.role === "admin") return true;
-    return !c.createdBy || c.createdBy === "public" || c.createdBy === currentUser.uid;
-  });
+  const triggerConfirm = (message: string, onConfirm: () => void | Promise<void>, description?: string) => {
+    setConfirmDialog({ message, onConfirm, description });
+  };
 
-  // Merge & Master Database alignment logic powered by Firebase
+  // Ready Convex hooks
+  const loadedCases = useQuery(api.cases.list);
+  const cases: LitigationCase[] = loadedCases || [];
+
+  const addCase = useMutation(api.cases.add);
+  const deleteCase = useMutation(api.cases.deleteCase);
+
+  // Subscribe to persistent authentication state
+  useEffect(() => {
+    const checkAuthStatus = () => {
+      let cachedUser = null;
+      try {
+        cachedUser = sessionStorage.getItem("mills_logged_in_user");
+      } catch (err) {
+        console.warn("sessionStorage read blocked in sandboxed environment:", err);
+      }
+
+      if (cachedUser) {
+        try {
+          const parsed = JSON.parse(cachedUser);
+          setCurrentUser(parsed.user);
+          setUserProfile(parsed.profile);
+        } catch (e) {
+          try {
+            sessionStorage.removeItem("mills_logged_in_user");
+          } catch {}
+        }
+      } else {
+        setCurrentUser(null);
+        setUserProfile(null);
+      }
+      setLoadingAuth(false);
+    };
+
+    checkAuthStatus();
+  }, []);
+
+  const handleAuthSuccess = (user: any, profile: { role: "owner" | "admin" | "user"; fullName: string }) => {
+    setCurrentUser(user);
+    setUserProfile(profile);
+    try {
+      sessionStorage.setItem("mills_logged_in_user", JSON.stringify({ user, profile }));
+    } catch (err) {
+      console.warn("sessionStorage write blocked in sandboxed environment:", err);
+    }
+  };
+
+  // Counsel users have permissions to view and edit all litigation dossiers, so no filtering by author is required.
+  const filteredCases = cases;
+
+  // Merge & Master Database alignment logic powered by Convex
   const handleCommitCase = async (newCase: LitigationCase, updatedExisting: boolean) => {
-    let finalCase = {
+    let finalCase: LitigationCase = {
       ...newCase,
       createdBy: currentUser?.uid || "public",
       createdByEmail: currentUser?.email || "system@niagaramills.com"
@@ -185,9 +154,9 @@ export default function App() {
     }
 
     try {
-      await setDoc(doc(db, "cases", finalCase.id), finalCase);
+      await addCase(finalCase);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `cases/${finalCase.id}`);
+      console.error("Convex write error:", error);
     }
   };
 
@@ -198,16 +167,16 @@ export default function App() {
         createdBy: currentUser?.uid || "public",
         createdByEmail: currentUser?.email || "system@niagaramills.com"
       };
-      await setDoc(doc(db, "cases", finalCase.id), finalCase);
+      await addCase(finalCase);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `cases/${manualCase.id}`);
+      console.error("Convex manual write error:", error);
     }
   };
 
   const handleImportMasterCases = async (importedList: LitigationCase[], isMerge: boolean) => {
     if (isMerge) {
       for (const newCase of importedList) {
-        let finalCase = {
+        let finalCase: LitigationCase = {
           ...newCase,
           createdBy: currentUser?.uid || "public",
           createdByEmail: currentUser?.email || "system@niagaramills.com"
@@ -260,76 +229,103 @@ export default function App() {
         }
 
         try {
-          await setDoc(doc(db, "cases", finalCase.id), finalCase);
+          await addCase(finalCase);
         } catch (error) {
-          handleFirestoreError(error, OperationType.WRITE, `cases/${finalCase.id}`);
+          console.error("Convex import write error:", error);
         }
       }
     } else {
-      // Clear current cases
+      // Clear current cases and import fresh
       try {
-        await setDoc(doc(db, "system", "setup"), { seeded: true });
         const idsToClear = cases.map(c => c.id);
-        await Promise.all(
-          idsToClear.map(id => deleteDoc(doc(db, "cases", id)))
-        );
-        // Import fresh list
+        for (const id of idsToClear) {
+          await deleteCase({ id });
+        }
         for (const c of importedList) {
           const withUser = {
             ...c,
             createdBy: currentUser?.uid || "public",
             createdByEmail: currentUser?.email || "system@niagaramills.com"
           };
-          await setDoc(doc(db, "cases", c.id), withUser);
+          await addCase(withUser);
         }
       } catch (error) {
-        handleFirestoreError(error, OperationType.WRITE, "cases");
+        console.error("Convex overwrite import error:", error);
       }
     }
   };
 
   const handleDeleteCase = async (caseId: string) => {
-    if (confirm(`Are you sure you want to expunge Litigation Dossier ${caseId} from master database? This cannot be undone.`)) {
-      try {
-        await deleteDoc(doc(db, "cases", caseId));
-        alert(`Litigation Dossier ${caseId} was deleted successfully from the database.`);
-      } catch (error) {
-        alert(`Failed to delete Litigation Dossier ${caseId}. Please ensure you are online and try again.`);
-        console.error("Delete Error:", error);
-      }
+    if (userProfile?.role === "user") {
+      showToast("Clearance Denied. Counsel users do not have authorization to delete litigation dossiers.", "error");
+      return;
     }
+    triggerConfirm(
+      `Expunge Dossier ${caseId}?`,
+      async () => {
+        try {
+          await deleteCase({ id: caseId });
+          showToast(`Litigation Dossier ${caseId} was deleted successfully from the database.`, "success");
+        } catch (error) {
+          showToast(`Failed to delete Litigation Dossier ${caseId}. Please try again.`, "error");
+          console.error("Delete Error:", error);
+        }
+      },
+      "This action will permanently purge this item from the secure primary ledger. It cannot be reverted."
+    );
   };
 
   const handleClearAllData = async () => {
-    if (confirm("Are you sure you want to completely expunge ALL litigation dossiers and wipe the entire database? This action is permanent and cannot be undone.")) {
-      try {
-        await setDoc(doc(db, "system", "setup"), { seeded: true });
-        const idsToDelete = cases.map(c => c.id);
-        await Promise.all(
-          idsToDelete.map(id => deleteDoc(doc(db, "cases", id)))
-        );
-        setCases([]);
-        alert("The entire database was wiped successfully.");
-      } catch (error) {
-        alert("Failed to wipe database records. Please try again.");
-        console.error("Wipe Error:", error);
-      }
+    if (userProfile?.role !== "owner") {
+      showToast("Clearance Denied. Wiping database registers requires Level 1: Owner authorization.", "error");
+      return;
     }
+    triggerConfirm(
+      "Expunge All litigation dossiers?",
+      async () => {
+        try {
+          // Clear local storage cache immediately if in fallback/localStorage mode
+          try {
+            localStorage.setItem("mills_counsel_cases", JSON.stringify([]));
+          } catch (e) {}
+
+          const idsToDelete = cases.map(c => c.id);
+          // Sequential deletion avoids overlapping localStorage race conditions
+          for (const id of idsToDelete) {
+            await deleteCase({ id });
+          }
+          showToast("The entire database was wiped successfully.", "success");
+        } catch (error) {
+          showToast("Failed to wipe database records. Please try again.", "error");
+          console.error("Wipe Error:", error);
+        }
+      },
+      "CRITICAL: This will instantly and permanently erase every litigation folder and secure dossier inside Niagara Mills portal. This action is irreversible."
+    );
   };
 
   const handleLoadDemoData = async () => {
     try {
-      // First save setup document to declare we are seeding/actively managing
-      await setDoc(doc(db, "system", "setup"), { seeded: true });
-      // Bulk write standard cases
       for (const c of initialCases) {
-        await setDoc(doc(db, "cases", c.id), c);
+        await addCase(c);
       }
-      alert("Demonstration cases populated successfully into your database.");
+      showToast("Demonstration cases populated successfully into your database.", "success");
     } catch (error) {
-      alert("Failed to populate demonstration cases. Please try again.");
+      showToast("Failed to populate demonstration cases. Please try again.", "error");
       console.error("Seed Error:", error);
     }
+  };
+
+  const handleLogout = () => {
+    try {
+      sessionStorage.clear();
+      localStorage.removeItem("mills_logged_in_user");
+      localStorage.removeItem("mills_counsel_bypass");
+    } catch (err) {
+      console.warn("Storage clearing blocked in sandboxed environment:", err);
+    }
+    setCurrentUser(null);
+    setUserProfile(null);
   };
 
   const handleUpdateCaseManual = async (e: React.FormEvent) => {
@@ -346,10 +342,10 @@ export default function App() {
     };
 
     try {
-      await setDoc(doc(db, "cases", finalCase.id), finalCase);
+      await addCase(finalCase);
       setEditingCase(null);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `cases/${finalCase.id}`);
+      console.error("Convex update manual error:", error);
     }
   };
 
@@ -400,11 +396,13 @@ export default function App() {
                       {userProfile.fullName}
                     </span>
                     <span className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded-sm uppercase tracking-wider ${
-                      userProfile.role === "admin"
-                        ? "bg-amber-500/15 text-amber-400 border border-amber-500/20"
-                        : "bg-indigo-500/15 text-indigo-400 border border-indigo-500/20"
+                      userProfile.role === "owner"
+                        ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"
+                        : userProfile.role === "admin"
+                          ? "bg-amber-500/15 text-amber-400 border border-amber-500/20"
+                          : "bg-indigo-500/15 text-indigo-400 border border-indigo-500/20"
                     }`}>
-                      {userProfile.role === "admin" ? "Admin" : "Standard"}
+                      {userProfile.role === "owner" ? "Owner" : userProfile.role === "admin" ? "Admin" : "Standard"}
                     </span>
                   </div>
                   <span className="text-[9px] text-slate-500 font-mono leading-none mt-0.5 max-w-[155px] truncate">
@@ -413,13 +411,14 @@ export default function App() {
                 </div>
                 <button
                   type="button"
-                  onClick={async () => {
-                    if (confirm("Sign out of current tax litigation session?")) {
-                      localStorage.removeItem("mills_counsel_bypass");
-                      await signOut(auth);
-                      setCurrentUser(null);
-                      setUserProfile(null);
-                    }
+                  onClick={() => {
+                    triggerConfirm(
+                      "Sign out of active session?",
+                      () => {
+                        handleLogout();
+                      },
+                      "Securely terminates your active legal clearance key and returns to the lockscreen."
+                    );
                   }}
                   className="p-1 px-2 rounded-lg bg-slate-900/80 border border-slate-800 hover:bg-rose-500/10 hover:border-rose-500/20 text-slate-400 hover:text-rose-400 transition cursor-pointer"
                   title="Sign Out Session"
@@ -498,6 +497,18 @@ export default function App() {
             Consolidated Sheets
           </button>
 
+          <button
+            onClick={() => setActiveTab("settings")}
+            className={`w-full text-left px-4 py-3 rounded-xl text-xs font-semibold flex items-center gap-3 transition ${
+              activeTab === "settings"
+                ? "bg-amber-500/10 text-amber-400 border-l-2 border-amber-500 shadow-sm"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/50"
+            }`}
+          >
+            <Sliders size={16} />
+            Settings & Clearance
+          </button>
+
           <div className="mt-auto border-t border-slate-800/80 pt-4 px-3 space-y-2 mt-8">
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Enterprise Target</span>
             <div className="bg-slate-900/40 p-3 rounded-xl border border-slate-800/70 space-y-1 text-center shadow-3xs">
@@ -507,7 +518,7 @@ export default function App() {
               </span>
             </div>
             
-            {userProfile?.role === "admin" && (
+            {userProfile?.role === "owner" && (
               <button
                 onClick={handleClearAllData}
                 className="w-full mt-2 bg-rose-500/10 hover:bg-rose-500/25 border border-rose-500/20 text-rose-400 text-[11px] font-bold py-2 rounded-xl flex items-center justify-center gap-2 transition duration-200 cursor-pointer"
@@ -518,7 +529,7 @@ export default function App() {
               </button>
             )}
 
-            {userProfile?.role === "admin" && filteredCases.length === 0 && (
+            {userProfile?.role === "owner" && filteredCases.length === 0 && (
               <button
                 onClick={handleLoadDemoData}
                 className="w-full mt-2 bg-emerald-500/10 hover:bg-emerald-500/25 border border-emerald-500/20 text-emerald-400 text-[11px] font-bold py-2 rounded-xl flex items-center justify-center gap-2 transition duration-200 cursor-pointer animate-pulse"
@@ -528,6 +539,23 @@ export default function App() {
                 Load Demo Cases
               </button>
             )}
+
+            <button
+              onClick={() => {
+                triggerConfirm(
+                  "Sign out of active session?",
+                  () => {
+                    handleLogout();
+                  },
+                  "Securely terminates your active legal clearance key and returns to the lockscreen."
+                );
+              }}
+              className="w-full mt-2 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-400 text-[11px] font-bold py-2 rounded-xl flex items-center justify-center gap-2 transition duration-200 cursor-pointer"
+              title="Securely close the active session and return to authentication"
+            >
+              <LogOut size={12} />
+              Secure Log Out
+            </button>
           </div>
         </aside>
 
@@ -551,6 +579,7 @@ export default function App() {
           {activeTab === "register" && (
             <CaseRegister
               cases={filteredCases}
+              userRole={userProfile?.role || "user"}
               onSelectCase={(id) => setSelectedCaseId(id)}
               onEditCase={(c) => setEditingCase(c)}
               onDeleteCase={handleDeleteCase}
@@ -561,6 +590,19 @@ export default function App() {
 
           {activeTab === "sheets" && (
             <SheetsViewer cases={filteredCases} />
+          )}
+
+          {activeTab === "settings" && (
+            <SettingsPanel 
+              currentUser={currentUser}
+              userProfile={userProfile}
+              onProfileUpdate={(nextProf) => setUserProfile(nextProf)}
+              onWipeDatabase={handleClearAllData}
+              onLoadDemo={handleLoadDemoData}
+              casesCount={filteredCases.length}
+              showToast={showToast}
+              showConfirm={triggerConfirm}
+            />
           )}
         </main>
 
@@ -716,6 +758,68 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Non-Blocking Custom Confirmation Modal Dialog */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#020617]/90 backdrop-blur-xs animate-fade-in">
+          <div className="bg-[#090d16] border border-slate-800 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center">
+            <div className="mt-2 w-12 h-12 bg-amber-500/15 border border-amber-500/25 text-amber-400 rounded-2xl flex items-center justify-center mx-auto">
+              <AlertTriangle size={22} />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono leading-normal">
+                {confirmDialog.message}
+              </h3>
+              {confirmDialog.description && (
+                <p className="text-[11px] text-slate-400 leading-normal font-mono">
+                  {confirmDialog.description}
+                </p>
+              )}
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDialog(null)}
+                className="flex-1 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-xs font-bold text-slate-400 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const cb = confirmDialog.onConfirm;
+                  setConfirmDialog(null);
+                  await cb();
+                }}
+                className="flex-1 py-2 bg-rose-600 hover:bg-rose-500 text-slate-950 font-bold rounded-xl text-xs transition cursor-pointer"
+              >
+                Proceed
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Elegant Non-Blocking Toast Notification pop */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 animate-bounce duration-300">
+          <div className={`p-4 rounded-2xl shadow-xl border flex items-center gap-3 text-xs max-w-md ${
+            toastType === "success" 
+              ? "bg-emerald-950/95 border-emerald-500/40 text-emerald-400"
+              : toastType === "error"
+                ? "bg-[#18080c]/95 border-rose-500/40 text-rose-400"
+                : "bg-[#0a0f1d]/95 border-indigo-500/40 text-indigo-400"
+          }`}>
+            <span className="font-semibold">{toastMessage}</span>
+            <button 
+              onClick={() => setToastMessage(null)}
+              className="text-slate-400 hover:text-white font-bold ml-auto font-mono text-[10px]"
+            >
+              ✕
+            </button>
           </div>
         </div>
       )}

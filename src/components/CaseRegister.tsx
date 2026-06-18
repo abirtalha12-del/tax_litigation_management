@@ -6,6 +6,7 @@ import { downloadManagementCaseSummary } from "../utils/docxGenerator";
 
 interface CaseRegisterProps {
   cases: LitigationCase[];
+  userRole?: string;
   onSelectCase: (caseId: string) => void;
   onEditCase: (c: LitigationCase) => void;
   onDeleteCase: (caseId: string) => void;
@@ -13,7 +14,7 @@ interface CaseRegisterProps {
   onImportCases: (imported: LitigationCase[], isMerge: boolean) => void;
 }
 
-export default function CaseRegister({ cases, onSelectCase, onEditCase, onDeleteCase, onAddCase, onImportCases }: CaseRegisterProps) {
+export default function CaseRegister({ cases, userRole = "user", onSelectCase, onEditCase, onDeleteCase, onAddCase, onImportCases }: CaseRegisterProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterTaxType, setFilterTaxType] = useState("All");
   const [filterForum, setFilterForum] = useState("All");
@@ -475,16 +476,25 @@ export default function CaseRegister({ cases, onSelectCase, onEditCase, onDelete
                           >
                             <Edit2 size={14} />
                           </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onDeleteCase(c.id);
-                            }}
-                            title="Expunge Record"
-                            className="p-1.5 rounded hover:bg-rose-500/10 text-rose-400 hover:text-rose-300 transition"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {userRole === "owner" ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteCase(c.id);
+                              }}
+                              title="Expunge Record"
+                              className="p-1.5 rounded hover:bg-rose-500/10 text-rose-400 hover:text-rose-300 transition cursor-pointer"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          ) : (
+                            <span 
+                              title="Expunging records is restricted to Level 1: Owner authorization" 
+                              className="p-1.5 rounded text-slate-600 block cursor-not-allowed"
+                            >
+                              <Trash2 size={14} className="opacity-45" />
+                            </span>
+                          )}
                         </div>
                       </td>
                     </tr>

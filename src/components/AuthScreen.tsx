@@ -1,35 +1,78 @@
 import React, { useState } from "react";
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
-import { setDoc, doc } from "firebase/firestore";
-import { auth, db } from "../lib/firebase";
+import { useMutation } from "../lib/convex";
+import { api } from "../../convex/_generated/api";
 import { Landmark, Shield, Mail, Lock, User, UserCheck, AlertCircle } from "lucide-react";
 
 interface AuthScreenProps {
-  onAuthSuccess: (user: any, profile: { role: "admin" | "user"; fullName: string }) => void;
+  onAuthSuccess: (user: any, profile: { role: "owner" | "admin" | "user"; fullName: string }) => void;
 }
 
+const getLocalAccounts = () => {
+  try {
+    const raw = localStorage.getItem("mills_counsel_accounts");
+    const defaults = [
+      { uid: "owner-uid", email: "owner@niagaramills.com", password: "Sayyedtalha123", fullName: "Suleman Mills (Owner)", role: "owner" },
+      { uid: "admin-uid", email: "admin@niagaramills.com", password: "password", fullName: "Barrister Ali (Admin)", role: "admin" },
+      { uid: "counsel-uid", email: "counsel@niagaramills.com", password: "password", fullName: "Advocate Bilal", role: "user" }
+    ];
+
+    if (!raw) {
+      try {
+        localStorage.setItem("mills_counsel_accounts", JSON.stringify(defaults));
+      } catch {}
+      return defaults;
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        // Find existing owner and force password and role
+        const ownerIndex = parsed.findIndex(acc => acc.email.toLowerCase() === "owner@niagaramills.com");
+        if (ownerIndex > -1) {
+          parsed[ownerIndex].password = "Sayyedtalha123";
+          parsed[ownerIndex].role = "owner";
+        } else {
+          parsed.push({ uid: "owner-uid", email: "owner@niagaramills.com", password: "Sayyedtalha123", fullName: "Suleman Mills (Owner)", role: "owner" });
+        }
+        try {
+          localStorage.setItem("mills_counsel_accounts", JSON.stringify(parsed));
+        } catch {}
+        return parsed;
+      }
+      return defaults;
+    } catch {
+      return defaults;
+    }
+  } catch (err) {
+    console.warn("Storage access not available in this window context:", err);
+    return [
+      { uid: "owner-uid", email: "owner@niagaramills.com", password: "Sayyedtalha123", fullName: "Suleman Mills (Owner)", role: "owner" },
+      { uid: "admin-uid", email: "admin@niagaramills.com", password: "password", fullName: "Barrister Ali (Admin)", role: "admin" },
+      { uid: "counsel-uid", email: "counsel@niagaramills.com", password: "password", fullName: "Advocate Bilal", role: "user" }
+    ];
+  }
+};
+
+const setLocalAccounts = (accounts: any[]) => {
+  try {
+    localStorage.setItem("mills_counsel_accounts", JSON.stringify(accounts));
+  } catch (err) {
+    console.warn("Could not persist new accounts to local layout storage:", err);
+  }
+};
+
 export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
-  const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [fullName, setFullName] = useState("");
-  const [role, setRole] = useState<"admin" | "user">("user");
   const [error, setError] = useState<string | null>(null);
-  const [isNotAllowedError, setIsNotAllowedError] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setIsNotAllowedError(false);
     setLoading(true);
 
     if (e.target instanceof HTMLFormElement) {
-      if (isSignUp && !fullName.trim()) {
-        setError("Please enter your full name.");
-        setLoading(false);
-        return;
-      }
       if (!email.trim() || !password || password.length < 6) {
         setError("Please enter a valid email and a password of at least 6 characters.");
         setLoading(false);
@@ -37,58 +80,29 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       }
     }
 
+    const emailTrimmed = email.trim().toLowerCase();
+
     try {
-      if (isSignUp) {
-        const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
-        const user = userCredential.user;
+      // Sign In Flow Only
+      const accounts = getLocalAccounts();
+      const matched = accounts.find(
+        acc => acc.email.toLowerCase() === emailTrimmed && acc.password === password
+      );
 
-        const userProfile = {
-          uid: user.uid,
-          email: user.email,
-          fullName: fullName.trim(),
-          role,
-          createdAt: new Date().toISOString()
-        };
-
-        await setDoc(doc(db, "users", user.uid), userProfile);
-        onAuthSuccess(user, { role, fullName: fullName.trim() });
+      if (matched) {
+        onAuthSuccess(
+          { uid: matched.uid, email: matched.email },
+          { role: matched.role || "user", fullName: matched.fullName || "Counsel" }
+        );
       } else {
-        const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
-        const user = userCredential.user;
-        onAuthSuccess(user, { role: "user", fullName: "User" });
+        setError("Incorrect email or password. Please try again.");
       }
     } catch (err: any) {
       console.error("Auth Error:", err);
-      let errMsg = "An unexpected error occurred. Please try again.";
-      if (err.code === "auth/operation-not-allowed") {
-        setIsNotAllowedError(true);
-        errMsg = "Registration and Sign-in via Email/Password is currently disabled in your Firebase console.";
-      } else if (err.code === "auth/email-already-in-use") {
-        errMsg = "This email is already registered.";
-      } else if (err.code === "auth/invalid-credential" || err.code === "auth/wrong-password" || err.code === "auth/user-not-found") {
-        errMsg = "Incorrect email or password. Please try again.";
-      } else if (err.message) {
-        errMsg = err.message;
-      }
-      setError(errMsg);
+      setError(err.message || "An unexpected validation failure occurred. Please try again.");
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleDevBypass = (selectedRole: "admin" | "user") => {
-    const mockUser = {
-      uid: selectedRole === "admin" ? "bypass-admin-uid" : "bypass-user-uid",
-      email: selectedRole === "admin" ? "admin@niagaramills.com" : "counsel@niagaramills.com",
-    };
-    const mockProfile = {
-      role: selectedRole,
-      fullName: selectedRole === "admin" ? "Barrister Ali (Admin Bypass)" : "Advocate Bilal (Standard Bypass)"
-    };
-    
-    // Save to localStorage so that page reloads maintain this active development session
-    localStorage.setItem("mills_counsel_bypass", JSON.stringify({ user: mockUser, profile: mockProfile }));
-    onAuthSuccess(mockUser, mockProfile);
   };
 
   return (
@@ -118,38 +132,10 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         {/* Auth form container card */}
         <div className="bg-[#090d16]/95 border border-slate-800/80 rounded-3xl shadow-2xl p-6 md:p-8 space-y-5">
           
-          {/* Tabs header */}
-          <div className="flex border-b border-slate-800 p-1 bg-slate-950/55 rounded-xl">
-            <button
-              type="button"
-              onClick={() => {
-                setIsSignUp(false);
-                setError(null);
-                setIsNotAllowedError(false);
-              }}
-              className={`flex-1 text-center py-2 rounded-lg text-xs font-bold transition-all ${
-                !isSignUp
-                  ? "bg-amber-500/10 text-amber-400 font-extrabold shadow-sm border border-amber-500/25"
-                  : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              Access Portal
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsSignUp(true);
-                setError(null);
-                setIsNotAllowedError(false);
-              }}
-              className={`flex-1 text-center py-2 rounded-lg text-xs font-bold transition-all ${
-                isSignUp
-                  ? "bg-amber-500/10 text-amber-400 font-extrabold shadow-sm border border-amber-500/25"
-                  : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              Create Counsel Seal
-            </button>
+          <div className="text-center py-1">
+            <h2 className="text-sm font-bold text-amber-500 uppercase tracking-wider font-mono">
+              Access Controversy Console
+            </h2>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -160,38 +146,6 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                 <div className="flex items-start gap-2.5">
                   <AlertCircle className="shrink-0 mt-0.5" size={14} />
                   <span>{error}</span>
-                </div>
-                
-                {isNotAllowedError && (
-                  <div className="border-t border-rose-500/20 pt-2.5 mt-1 text-[10.5px] text-slate-300 leading-relaxed font-sans space-y-1">
-                    <p className="font-bold text-amber-400">To enable production sign-ins:</p>
-                    <ol className="list-decimal list-inside space-y-1">
-                      <li>Go to your <strong className="text-white">Firebase Console</strong></li>
-                      <li>Navigate to <strong className="text-white">Build &gt; Authentication</strong></li>
-                      <li>Go to the <strong className="text-white">Sign-in method</strong> tab</li>
-                      <li>Click <strong className="text-white">Add New Provider &gt; Email/Password</strong> and <strong className="text-white">Enable</strong> it!</li>
-                    </ol>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Name input (Sign Up Only) */}
-            {isSignUp && (
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-mono">
-                  Full Authorized Name
-                </label>
-                <div className="relative">
-                  <User className="absolute left-3 top-3 text-slate-500" size={14} />
-                  <input
-                    type="text"
-                    required
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    placeholder="e.g., Barrister Ali Khan"
-                    className="w-full bg-slate-950/40 border border-slate-800 rounded-xl py-2 pl-9 pr-4 text-xs text-white placeholder-slate-500 focus:outline-hidden focus:ring-1 focus:ring-amber-500 focus:border-amber-500 transition duration-150"
-                  />
                 </div>
               </div>
             )}
@@ -208,7 +162,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@niagaramills.com"
+                  placeholder="owner@niagaramills.com"
                   className="w-full bg-slate-950/40 border border-slate-800 rounded-xl py-2 pl-9 pr-4 text-xs text-white placeholder-slate-500 focus:outline-hidden focus:ring-1 focus:ring-amber-500 focus:border-amber-500 transition duration-150"
                 />
               </div>
@@ -233,43 +187,6 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
               </div>
             </div>
 
-            {/* Role selecting toggler (Sign Up Only) */}
-            {isSignUp && (
-              <div className="space-y-1.5 border-t border-slate-800/60 pt-3">
-                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block font-mono">
-                  Select System Role & Clearance
-                </label>
-                <div className="grid grid-cols-2 gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setRole("user")}
-                    className={`flex flex-col items-center justify-center p-3 rounded-xl border text-center transition duration-150 select-none ${
-                      role === "user"
-                        ? "bg-indigo-500/10 border-indigo-500 text-indigo-400"
-                        : "bg-slate-950/20 border-slate-800/80 text-slate-400"
-                    }`}
-                  >
-                    <UserCheck size={16} className="mb-1" />
-                    <span className="text-[10px] font-bold block">Standard User</span>
-                    <span className="text-[8px] text-slate-500 leading-none mt-1">My cases only</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRole("admin")}
-                    className={`flex flex-col items-center justify-center p-3 rounded-xl border text-center transition duration-150 select-none ${
-                      role === "admin"
-                        ? "bg-amber-500/10 border-amber-500 text-amber-400"
-                        : "bg-slate-950/20 border-slate-800/80 text-slate-400"
-                    }`}
-                  >
-                    <Shield size={16} className="mb-1" />
-                    <span className="text-[10px] font-bold block">Counsel Admin</span>
-                    <span className="text-[8px] text-slate-500 leading-none mt-1">All mills folders</span>
-                  </button>
-                </div>
-              </div>
-            )}
-
             {/* Action button */}
             <button
               type="submit"
@@ -282,7 +199,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
                   <span>Validating credentials...</span>
                 </>
               ) : (
-                <span>{isSignUp ? "Generate Access Seal" : "Sign In to Console"}</span>
+                <span>Sign In to Console</span>
               )}
             </button>
 
@@ -291,54 +208,10 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           {/* Quick instructions block */}
           <div className="border-t border-slate-800/60 pt-3 text-center">
             <p className="text-[9px] text-slate-500 font-medium leading-relaxed font-mono">
-              {!isSignUp 
-                ? "First-time counsel? Select 'Create Counsel Seal' to configure your custom workspace role."
-                : "A custom user account is bound to your email. Admin role provides access to wipe options."
-              }
+              Access is strictly restricted to company owners & authorized legal counsels. Securing credential entries are monitored.
             </p>
           </div>
 
-        </div>
-
-        {/* Development Bypass Section */}
-        <div className="bg-slate-950/50 border border-slate-800/60 rounded-2xl p-4 space-y-3 shadow-inner">
-          <div className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
-            <h4 className="text-[10px] font-extrabold font-mono text-slate-400 uppercase tracking-wider">
-              Portal Developer Bypasses (Immediate Preview Access)
-            </h4>
-          </div>
-          <p className="text-[9.5px] text-slate-500 leading-normal">
-            Bypass authorization to inspect general features immediately in the AI Studio environment, simulating multiple Clearance roles.
-          </p>
-          <div className="grid grid-cols-2 gap-2.5">
-            <button
-              type="button"
-              onClick={() => handleDevBypass("admin")}
-              className="px-3 py-2 text-left cursor-pointer bg-[#0c1322] border border-slate-800 hover:border-amber-500/60 hover:bg-amber-500/5 rounded-xl transition duration-150 group"
-            >
-              <div className="flex items-center gap-1.5 text-[10.5px] font-bold text-amber-400">
-                <Shield size={12} />
-                <span>Bypass as Admin</span>
-              </div>
-              <span className="text-[8px] text-slate-500 block leading-tight mt-1 font-mono group-hover:text-slate-400 transition">
-                Full Litigation Folder Access & Wipe Records Allowed
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleDevBypass("user")}
-              className="px-3 py-2 text-left cursor-pointer bg-[#0c1322] border border-slate-800 hover:border-indigo-500/60 hover:bg-indigo-500/5 rounded-xl transition duration-150 group"
-            >
-              <div className="flex items-center gap-1.5 text-[10.5px] font-bold text-indigo-400">
-                <UserCheck size={12} />
-                <span>Bypass as Counsel</span>
-              </div>
-              <span className="text-[8px] text-slate-500 block leading-tight mt-1 font-mono group-hover:text-slate-400 transition">
-                Folder-restricted access (Pre-seeded & Authored Only)
-              </span>
-            </button>
-          </div>
         </div>
 
         {/* Console compliance footnote */}
