@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { ConvexReactClient, useQuery as useRealQuery, useMutation as useRealMutation } from "convex/react";
+import React, { useState, useEffect } from "react";
+import { ConvexReactClient, ConvexProvider, useQuery as useRealQuery, useMutation as useRealMutation } from "convex/react";
 import { initialCases } from "../mockData";
 
 // Retrieve the Convex URL from Vite environment variables
@@ -7,6 +7,14 @@ const convexUrl = ((import.meta as any).env?.VITE_CONVEX_URL as string) || "";
 
 // Initialize standard Convex React Client, guarding it with check to prevent crashes if URL is empty
 export const convexClient = convexUrl.trim() ? new ConvexReactClient(convexUrl) : null;
+
+// Dynamic provider component to wrap React tree with ConvexProvider when live connection is present
+export function ConvexAppProvider({ children }: { children: React.ReactNode }) {
+  if (convexClient) {
+    return React.createElement(ConvexProvider, { client: convexClient }, children);
+  }
+  return React.createElement(React.Fragment, null, children);
+}
 
 // Reactive state listeners for our offline development bypass / fallback mode
 const listeners = new Set<() => void>();
