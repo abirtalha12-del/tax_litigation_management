@@ -71,6 +71,11 @@ const setLocalUsers = (users: any[]) => {
 
 // Target resolver mapping based on arguments to robust client-side storage endpoints
 function resolveLocalQuery(targetApi: any, args: any) {
+  const apiPath = getStableApiPath(targetApi);
+  if (apiPath && apiPath.includes("getAllUsers")) {
+    return getLocalUsers();
+  }
+
   // If we have query arguments containing uid, resolve to user profile
   if (args && args.uid !== undefined) {
     const uid = args.uid;
@@ -85,12 +90,15 @@ function resolveLocalQuery(targetApi: any, args: any) {
       try {
         const parsed = JSON.parse(bypassStr);
         if (parsed.user?.uid === uid) {
+          const localUsrs = getLocalUsers();
+          const targetLocal = localUsrs.find((u: any) => u.uid === uid);
           return {
             uid: parsed.user.uid,
             email: parsed.user.email,
             fullName: parsed.profile.fullName,
             role: parsed.profile.role,
             createdAt: new Date().toISOString(),
+            rights: targetLocal?.rights || parsed.profile.rights || undefined,
           };
         }
       } catch {}
@@ -183,6 +191,20 @@ export function useMutation(targetApi: any): (args: any) => Promise<any> {
 
   // React-backed mutations operating on local cached replicas
   return async (args: any) => {
+    const apiPath = getStableApiPath(targetApi);
+    if (apiPath && (apiPath.includes("updateUserRights") || apiPath.includes("users:updateUserRights"))) {
+      const usersList = getLocalUsers();
+      const existingIdx = usersList.findIndex((u: any) => u.uid === args.uid);
+      if (existingIdx > -1) {
+        usersList[existingIdx] = {
+          ...usersList[existingIdx],
+          rights: args.rights
+        };
+        setLocalUsers(usersList);
+      }
+      return args.uid;
+    }
+
     // Identify profile mutations (creating or patcing users - args has uid and we don't have caseInfo)
     const isProfile = args && args.uid !== undefined && args.caseInfo === undefined;
 

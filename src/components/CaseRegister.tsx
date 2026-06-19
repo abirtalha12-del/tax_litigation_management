@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { LitigationCase } from "../types";
+import { LitigationCase, UserRights, getDefaultRights } from "../types";
 import { Calendar, ChevronDown, ChevronUp, Edit2, FileDown, Landmark, Plus, Search, Trash2, Eye, Info, Database, Filter } from "lucide-react";
 import MasterFileImporter from "./MasterFileImporter";
 import { downloadManagementCaseSummary } from "../utils/docxGenerator";
@@ -7,14 +7,38 @@ import { downloadManagementCaseSummary } from "../utils/docxGenerator";
 interface CaseRegisterProps {
   cases: LitigationCase[];
   userRole?: string;
+  userRights?: UserRights;
   onSelectCase: (caseId: string) => void;
   onEditCase: (c: LitigationCase) => void;
   onDeleteCase: (caseId: string) => void;
+  onBulkDelete?: (caseIds: string[]) => void;
+  onBulkUpdateStatus?: (caseIds: string[], status: string) => void;
   onAddCase: (c: LitigationCase) => void;
   onImportCases: (imported: LitigationCase[], isMerge: boolean) => void;
 }
 
-export default function CaseRegister({ cases, userRole = "user", onSelectCase, onEditCase, onDeleteCase, onAddCase, onImportCases }: CaseRegisterProps) {
+export default function CaseRegister({ 
+  cases, 
+  userRole = "user", 
+  userRights, 
+  onSelectCase, 
+  onEditCase, 
+  onDeleteCase, 
+  onBulkDelete,
+  onBulkUpdateStatus,
+  onAddCase, 
+  onImportCases 
+}: CaseRegisterProps) {
+  const activeRights = userRights || getDefaultRights(userRole as any);
+
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  const handleToggleSelect = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
   const [searchQuery, setSearchQuery] = useState("");
   const [filterTaxType, setFilterTaxType] = useState("All");
   const [filterForum, setFilterForum] = useState("All");
@@ -122,6 +146,27 @@ export default function CaseRegister({ cases, userRole = "user", onSelectCase, o
 
   // Calculate exposures on filtered list
   const filteredExposure = filteredCases.reduce((acc, c) => acc + (c.financialInfo.totalExposure || 0), 0);
+
+  // Selection states based on current filtered (visible) cases
+  const visibleIds = filteredCases.map((c) => c.id);
+  const isAllSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));
+  const isSomeSelected = visibleIds.some((id) => selectedIds.includes(id)) && !isAllSelected;
+
+  const handleToggleSelectAllVisible = () => {
+    if (isAllSelected) {
+      setSelectedIds((prev) => prev.filter((id) => !visibleIds.includes(id)));
+    } else {
+      setSelectedIds((prev) => {
+        const next = [...prev];
+        visibleIds.forEach((id) => {
+          if (!next.includes(id)) {
+            next.push(id);
+          }
+        });
+        return next;
+      });
+    }
+  };
 
   const toggleRow = (caseId: string) => {
     if (expandedCaseId === caseId) {
@@ -235,26 +280,46 @@ export default function CaseRegister({ cases, userRole = "user", onSelectCase, o
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5 mt-2 md:mt-0">
-          <button
-            onClick={() => setShowImporter(!showImporter)}
-            className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border cursor-pointer transition duration-200 ${
-              showImporter
-                ? "bg-amber-500/20 border-amber-500/40 text-amber-300 hover:bg-amber-500/30"
-                : "bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-855 hover:border-slate-700"
-            }`}
-            title="Import/Reload master database files"
-          >
-            <Database size={15} />
-            Database Wizard
-          </button>
+          {activeRights.canWipeDatabase ? (
+            <button
+              onClick={() => setShowImporter(!showImporter)}
+              className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border cursor-pointer transition duration-200 ${
+                showImporter
+                  ? "bg-amber-500/20 border-amber-500/40 text-amber-300 hover:bg-amber-500/30"
+                  : "bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-855 hover:border-slate-700"
+              }`}
+              title="Import/Reload master database files"
+            >
+              <Database size={15} />
+              Database Wizard
+            </button>
+          ) : (
+            <span 
+              title="Database Wizard (Wipe/Import) is restricted by security clearance" 
+              className="px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 border border-slate-800 bg-slate-900/40 text-slate-600 cursor-not-allowed select-none"
+            >
+              <Database size={15} className="opacity-40" />
+              Database Wizard
+            </span>
+          )}
           
-          <button
-            onClick={() => setShowAddForm(true)}
-            className="bg-amber-500 hover:bg-amber-400 text-slate-950 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 shadow-xs cursor-pointer transition duration-240"
-          >
-            <Plus size={16} />
-            Add Register Entry
-          </button>
+          {activeRights.canCreateDossier ? (
+            <button
+              onClick={() => setShowAddForm(true)}
+              className="bg-amber-500 hover:bg-amber-400 text-slate-950 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 shadow-xs cursor-pointer transition duration-240"
+            >
+              <Plus size={16} />
+              Add Register Entry
+            </button>
+          ) : (
+            <span 
+              title="Add Register Entry is restricted by security clearance" 
+              className="bg-slate-850 border border-slate-800 text-slate-500 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 cursor-not-allowed select-none"
+            >
+              <Plus size={16} className="opacity-40" />
+              Add Register Entry
+            </span>
+          )}
         </div>
       </div>
 
@@ -375,12 +440,104 @@ export default function CaseRegister({ cases, userRole = "user", onSelectCase, o
         </div>
       </div>
 
+      {/* Bulk Action Bar */}
+      {selectedIds.length > 0 && (
+        <div className="bg-[#090d16] border border-amber-500/30 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4 animate-slide-up shadow-lg">
+          <div className="flex items-center gap-3">
+            <div className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
+            <span className="text-xs text-slate-300 font-medium font-sans">
+              <strong className="text-white text-sm font-bold font-mono">{selectedIds.length}</strong> {selectedIds.length === 1 ? "dossier" : "dossiers"} selected
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelectedIds([])}
+              className="text-[10px] text-amber-500 hover:text-amber-400 font-bold uppercase tracking-wider underline cursor-pointer hover:no-underline ml-2"
+            >
+              Deselect All
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            {/* 1. Bulk Update Status */}
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-bold">Update Status:</span>
+              {activeRights.canEditDossier ? (
+                <select
+                  onChange={(e) => {
+                    if (e.target.value && onBulkUpdateStatus) {
+                      onBulkUpdateStatus(selectedIds, e.target.value);
+                      setSelectedIds([]);
+                    }
+                    e.target.value = ""; // Reset dropdown
+                  }}
+                  className="bg-[#020617] text-slate-250 border border-slate-800 rounded-lg p-1.5 px-2.5 text-xs text-left focus:outline-none focus:border-amber-500/80 hover:border-slate-700 cursor-pointer [&>option]:bg-[#0f172a] [&>option]:text-white"
+                >
+                  <option value="">-- Apply Status --</option>
+                  <option value="Open">Open</option>
+                  <option value="Closed">Closed</option>
+                  <option value="Active Appeal">Active Appeal</option>
+                  <option value="Under Review">Under Review</option>
+                </select>
+              ) : (
+                <select
+                  disabled
+                  title="Bulk modifications are restricted by security clearance"
+                  className="bg-slate-900/40 text-slate-600 border border-slate-800/80 rounded-lg p-1.5 px-2.5 text-xs cursor-not-allowed select-none animate-pulse"
+                >
+                  <option>Restricted</option>
+                </select>
+              )}
+            </div>
+
+            <div className="h-5 w-[1px] bg-slate-800 hidden sm:block mx-1" />
+
+            {/* 2. Bulk Delete Cases */}
+            {activeRights.canDeleteDossier ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (onBulkDelete) {
+                    onBulkDelete(selectedIds);
+                    setSelectedIds([]);
+                  }
+                }}
+                className="bg-rose-500/10 hover:bg-rose-500 border border-rose-500/25 hover:border-rose-500 text-rose-400 hover:text-white px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 transition duration-200 cursor-pointer"
+              >
+                <Trash2 size={13} />
+                Expunge Selected
+              </button>
+            ) : (
+              <span
+                title="Consolidated records destruction is restricted by security clearance"
+                className="bg-slate-900/40 border border-slate-800 text-slate-600 px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 cursor-not-allowed select-none opacity-40"
+              >
+                <Trash2 size={13} />
+                Expunge Selected
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Registers Grid View */}
       <div className="bg-[#0f172a] rounded-3xl border border-slate-800 overflow-hidden shadow-3xs">
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-left">
             <thead>
               <tr className="border-b border-slate-800 bg-slate-950/65 select-none">
+                <th className="py-3.5 px-5 w-12 text-center">
+                  <input
+                    type="checkbox"
+                    checked={isAllSelected}
+                    ref={(el) => {
+                      if (el) {
+                        el.indeterminate = isSomeSelected;
+                      }
+                    }}
+                    onChange={handleToggleSelectAllVisible}
+                    className="w-4 h-4 text-amber-500 bg-[#020617] border-slate-800 rounded focus:ring-0 checked:bg-amber-500 cursor-pointer"
+                  />
+                </th>
                 <th className="py-3.5 px-5 text-[11px] font-bold text-slate-450 uppercase tracking-wider font-mono">Case ID</th>
                 <th className="py-3.5 px-4 text-[11px] font-bold text-slate-450 uppercase tracking-wider">Taxpayer Identity</th>
                 <th className="py-3.5 px-4 text-[11px] font-bold text-slate-450 uppercase tracking-wider">Forum / Code</th>
@@ -394,9 +551,18 @@ export default function CaseRegister({ cases, userRole = "user", onSelectCase, o
             <tbody className="divide-y divide-slate-800/60 text-xs">
               {filteredCases.map((c) => {
                 const isExpanded = expandedCaseId === c.id;
+                const isChecked = selectedIds.includes(c.id);
                 return (
                   <React.Fragment key={c.id}>
-                    <tr className="hover:bg-slate-900/40 transition group">
+                    <tr className={`hover:bg-slate-900/40 transition group ${isChecked ? "bg-amber-550/5 hover:bg-amber-550/10" : ""}`}>
+                      <td className="py-4 px-5 text-center w-12 shrink-0">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => handleToggleSelect(c.id)}
+                          className="w-4 h-4 text-amber-500 bg-[#020617] border-slate-800 rounded focus:ring-0 checked:bg-amber-500 cursor-pointer"
+                        />
+                      </td>
                       <td className="py-4 px-5 font-mono font-bold text-amber-400">
                         <button
                           type="button"
@@ -456,27 +622,45 @@ export default function CaseRegister({ cases, userRole = "user", onSelectCase, o
                           >
                             <Eye size={14} />
                           </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              downloadManagementCaseSummary(c);
-                            }}
-                            title="Download Word Case Summary (.doc)"
-                            className="p-1.5 rounded bg-emerald-500/10 hover:bg-emerald-500/25 text-emerald-400 transition"
-                          >
-                            <FileDown size={14} />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onEditCase(c);
-                            }}
-                            title="Direct Register Modification"
-                            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition"
-                          >
-                            <Edit2 size={14} />
-                          </button>
-                          {userRole === "owner" ? (
+                          {activeRights.canExportReports ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                downloadManagementCaseSummary(c);
+                              }}
+                              title="Download Word Case Summary (.doc)"
+                              className="p-1.5 rounded bg-emerald-500/10 hover:bg-emerald-500/25 text-emerald-400 transition cursor-pointer"
+                            >
+                              <FileDown size={14} />
+                            </button>
+                          ) : (
+                            <span 
+                              title="Downloading reports is restricted by security clearance" 
+                              className="p-1.5 rounded text-slate-600 block cursor-not-allowed"
+                            >
+                              <FileDown size={14} className="opacity-45" />
+                            </span>
+                          )}
+                          {activeRights.canEditDossier ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onEditCase(c);
+                              }}
+                              title="Direct Register Modification"
+                              className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+                            >
+                              <Edit2 size={14} />
+                            </button>
+                          ) : (
+                            <span 
+                              title="Modifying registers is restricted by security clearance" 
+                              className="p-1.5 rounded text-slate-600 block cursor-not-allowed"
+                            >
+                              <Edit2 size={14} className="opacity-45" />
+                            </span>
+                          )}
+                          {activeRights.canDeleteDossier ? (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -489,7 +673,7 @@ export default function CaseRegister({ cases, userRole = "user", onSelectCase, o
                             </button>
                           ) : (
                             <span 
-                              title="Expunging records is restricted to Level 1: Owner authorization" 
+                              title="Expunging records is restricted by security clearance" 
                               className="p-1.5 rounded text-slate-600 block cursor-not-allowed"
                             >
                               <Trash2 size={14} className="opacity-45" />
@@ -502,7 +686,7 @@ export default function CaseRegister({ cases, userRole = "user", onSelectCase, o
                     {/* Timeline Collapsible Row */}
                     {isExpanded && (
                       <tr>
-                        <td colSpan={8} className="bg-[#020617]/50 p-6 border-b border-slate-800">
+                        <td colSpan={9} className="bg-[#020617]/50 p-6 border-b border-slate-800">
                           <div className="max-w-4xl space-y-4">
                             <div className="flex items-center gap-2">
                               <Landmark size={15} className="text-slate-400" />

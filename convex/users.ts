@@ -18,6 +18,15 @@ export const createProfile = mutation({
     fullName: v.string(),
     role: v.string(),
     createdAt: v.string(),
+    rights: v.optional(
+      v.object({
+        canCreateDossier: v.boolean(),
+        canEditDossier: v.boolean(),
+        canDeleteDossier: v.boolean(),
+        canExportReports: v.boolean(),
+        canWipeDatabase: v.boolean(),
+      })
+    ),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -32,3 +41,34 @@ export const createProfile = mutation({
     }
   },
 });
+
+export const updateUserRights = mutation({
+  args: {
+    uid: v.string(),
+    rights: v.object({
+      canCreateDossier: v.boolean(),
+      canEditDossier: v.boolean(),
+      canDeleteDossier: v.boolean(),
+      canExportReports: v.boolean(),
+      canWipeDatabase: v.boolean(),
+    }),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("users")
+      .filter((q) => q.eq(q.field("uid"), args.uid))
+      .first();
+    if (!existing) {
+      throw new Error("User profile not found");
+    }
+    await ctx.db.patch(existing._id, { rights: args.rights });
+    return existing._id;
+  },
+});
+
+export const getAllUsers = query({
+  handler: async (ctx) => {
+    return await ctx.db.query("users").collect();
+  },
+});
+

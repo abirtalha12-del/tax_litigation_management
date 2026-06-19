@@ -1,26 +1,29 @@
 import React, { useState, useEffect } from "react";
 import { initialCases } from "./mockData";
-import { LitigationCase, CaseChronologyEvent } from "./types";
+import { LitigationCase, CaseChronologyEvent, UserRights, getDefaultRights } from "./types";
 import Dashboard from "./components/Dashboard";
 import Uploader from "./components/Uploader";
 import CaseRegister from "./components/CaseRegister";
 import SheetsViewer from "./components/SheetsViewer";
 import CaseDetailModal from "./components/CaseDetailModal";
 import SettingsPanel from "./components/SettingsPanel";
-import { Briefcase, FileText, Landmark, LayoutDashboard, Calendar, Search, Trash, Edit2, CheckCircle2, AlertTriangle, ShieldCheck, Clock, PlusCircle, LogOut, Sliders } from "lucide-react";
+import LogsPanel from "./components/LogsPanel";
+import { Briefcase, FileText, Landmark, LayoutDashboard, Calendar, Search, Trash, Edit2, CheckCircle2, AlertTriangle, ShieldCheck, Clock, PlusCircle, LogOut, Sliders, Activity } from "lucide-react";
 import { useQuery, useMutation } from "./lib/convex";
 import { api } from "../convex/_generated/api";
 import AuthScreen from "./components/AuthScreen";
+import { logAction, clearActionLogs, getActionLogs, subscribeToLogs, UserActionLog } from "./utils/auditLogger";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>("dashboard");
+  const [actionLogs, setActionLogs] = useState<UserActionLog[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [editingCase, setEditingCase] = useState<LitigationCase | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Auth States
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const [userProfile, setUserProfile] = useState<{ role: "owner" | "admin" | "user"; fullName: string } | null>(null);
+  const [userProfile, setUserProfile] = useState<{ role: "owner" | "admin" | "user"; fullName: string; rights?: UserRights } | null>(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
 
   // Nice Toast & Confirm States for non-blocking browser sandbox compliance
@@ -81,9 +84,20 @@ export default function App() {
     checkAuthStatus();
   }, []);
 
-  const handleAuthSuccess = (user: any, profile: { role: "owner" | "admin" | "user"; fullName: string }) => {
+  // Listen for real-time audit action logs state updates
+  useEffect(() => {
+    setActionLogs(getActionLogs());
+    const unsubscribe = subscribeToLogs(() => {
+      setActionLogs(getActionLogs());
+    });
+    return unsubscribe;
+  }, []);
+
+  const handleAuthSuccess = (user: any, profile: { role: "owner" | "admin" | "user"; fullName: string; rights?: UserRights }) => {
     setCurrentUser(user);
     setUserProfile(profile);
+    // Write login audit trail record
+    logAction(user, profile, "LOGIN", `User '${profile.fullName}' successfully signed in. Security session created.`);
     try {
       sessionStorage.setItem("mills_logged_in_user", JSON.stringify({ user, profile }));
     } catch (err) {
@@ -155,6 +169,21 @@ export default function App() {
 
     try {
       await addCase(finalCase);
+      if (updatedExisting) {
+        logAction(
+          currentUser,
+          userProfile,
+          "DOSSIER_UPDATE",
+          `Updated litigation dossier (AI doc alignment) for taxpayer: ${finalCase.caseInfo.taxpayerName} (Ref: ${finalCase.caseInfo.referenceNumber || "N/A"})`
+        );
+      } else {
+        logAction(
+          currentUser,
+          userProfile,
+          "DOSSIER_CREATE",
+          `Committed brand new litigation dossier via AI analysis for taxpayer: ${finalCase.caseInfo.taxpayerName} (Ref: ${finalCase.caseInfo.referenceNumber || "N/A"})`
+        );
+      }
     } catch (error) {
       console.error("Convex write error:", error);
     }
@@ -168,6 +197,12 @@ export default function App() {
         createdByEmail: currentUser?.email || "system@niagaramills.com"
       };
       await addCase(finalCase);
+      logAction(
+        currentUser,
+        userProfile,
+        "DOSSIER_CREATE",
+        `Manually created controversy dossier for taxpayer: ${finalCase.caseInfo.taxpayerName} (Ref: ${finalCase.caseInfo.referenceNumber || "N/A"})`
+      );
     } catch (error) {
       console.error("Convex manual write error:", error);
     }
@@ -256,15 +291,20 @@ export default function App() {
   };
 
   const handleDeleteCase = async (caseId: string) => {
-    if (userProfile?.role === "user") {
-      showToast("Clearance Denied. Counsel users do not have authorization to delete litigation dossiers.", "error");
+    const rights = userProfile?.rights || getDefaultRights(userProfile?.role || "user");
+    if (!rights.canDeleteDossier) {
+      showToast("Clearance Denied. You do not have dynamic security clearance rights to delete litigation dossiers.", "error");
       return;
     }
+    const target = cases.find(c => c.id === caseId);
+    const details = target ? `${target.caseInfo.taxpayerName} [${target.caseInfo.referenceNumber}]` : caseId;
+
     triggerConfirm(
       `Expunge Dossier ${caseId}?`,
       async () => {
         try {
           await deleteCase({ id: caseId });
+          logAction(currentUser, userProfile, "DOSSIER_DELETE", `Permanently expunged controversy dossier for taxpayer: ${details}`);
           showToast(`Litigation Dossier ${caseId} was deleted successfully from the database.`, "success");
         } catch (error) {
           showToast(`Failed to delete Litigation Dossier ${caseId}. Please try again.`, "error");
@@ -275,9 +315,65 @@ export default function App() {
     );
   };
 
+  const handleBulkDelete = async (caseIds: string[]) => {
+    const rights = userProfile?.rights || getDefaultRights(userProfile?.role || "user");
+    if (!rights.canDeleteDossier) {
+      showToast("Clearance Denied. You do not have dynamic security clearance rights to delete litigation dossiers.", "error");
+      return;
+    }
+    triggerConfirm(
+      `Bulk Expunge ${caseIds.length} Dossiers?`,
+      async () => {
+        try {
+          for (const id of caseIds) {
+            await deleteCase({ id });
+          }
+          logAction(currentUser, userProfile, "BULK_DELETE", `A bulk records expunge successfully processed ${caseIds.length} litigation folders from the ledger.`);
+          showToast(`Successfully expunged ${caseIds.length} selected dossiers from the primary ledger.`, "success");
+        } catch (error) {
+          showToast("Failed to complete bulk dossier deletion. Please try again.", "error");
+          console.error("Bulk Delete Error:", error);
+        }
+      },
+      `This action will permanently purge all ${caseIds.length} selected items from the secure primary ledger. It cannot be reverted.`
+    );
+  };
+
+  const handleBulkUpdateStatus = async (caseIds: string[], nextStatus: string) => {
+    const rights = userProfile?.rights || getDefaultRights(userProfile?.role || "user");
+    if (!rights.canEditDossier) {
+      showToast("Clearance Denied. You do not have dynamic security clearance rights to modify registers.", "error");
+      return;
+    }
+    try {
+      let updatedCount = 0;
+      for (const id of caseIds) {
+        const target = cases.find((c) => c.id === id);
+        if (target) {
+          const updatedCase = {
+            ...target,
+            outcomeInfo: {
+              ...target.outcomeInfo,
+              currentStatus: nextStatus
+            },
+            updatedAt: new Date().toISOString()
+          };
+          await addCase(updatedCase);
+          updatedCount++;
+        }
+      }
+      logAction(currentUser, userProfile, "BULK_STATUS", `Bulk updated current litigation stage/status flag to '${nextStatus}' on ${updatedCount} portfolios.`);
+      showToast(`Successfully modified the status of ${updatedCount} selected dossiers to '${nextStatus}'.`, "success");
+    } catch (error) {
+      showToast("Failed to bulk update dossier status. Please try again.", "error");
+      console.error("Bulk Status Update Error:", error);
+    }
+  };
+
   const handleClearAllData = async () => {
-    if (userProfile?.role !== "owner") {
-      showToast("Clearance Denied. Wiping database registers requires Level 1: Owner authorization.", "error");
+    const rights = userProfile?.rights || getDefaultRights(userProfile?.role || "user");
+    if (!rights.canWipeDatabase) {
+      showToast("Clearance Denied. Wiping database registers requires specific dynamic authorization rights.", "error");
       return;
     }
     triggerConfirm(
@@ -294,6 +390,7 @@ export default function App() {
           for (const id of idsToDelete) {
             await deleteCase({ id });
           }
+          logAction(currentUser, userProfile, "WIPE_RECORDS", `Completely wiped all litigation folder records from the primary database logs.`);
           showToast("The entire database was wiped successfully.", "success");
         } catch (error) {
           showToast("Failed to wipe database records. Please try again.", "error");
@@ -309,6 +406,7 @@ export default function App() {
       for (const c of initialCases) {
         await addCase(c);
       }
+      logAction(currentUser, userProfile, "SEED_DEMO", `Seeded and re-populated 4 pre-set mock controversy dossiers into active registration ledgers.`);
       showToast("Demonstration cases populated successfully into your database.", "success");
     } catch (error) {
       showToast("Failed to populate demonstration cases. Please try again.", "error");
@@ -317,6 +415,9 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    if (currentUser && userProfile) {
+      logAction(currentUser, userProfile, "LOGOUT", `User session securely signed out. Session token cleared.`);
+    }
     try {
       sessionStorage.clear();
       localStorage.removeItem("mills_logged_in_user");
@@ -343,6 +444,12 @@ export default function App() {
 
     try {
       await addCase(finalCase);
+      logAction(
+        currentUser,
+        userProfile,
+        "DOSSIER_UPDATE",
+        `Manually modified case files for taxpayer: ${finalCase.caseInfo.taxpayerName} (Ref: ${finalCase.caseInfo.referenceNumber || "N/A"})`
+      );
       setEditingCase(null);
     } catch (error) {
       console.error("Convex update manual error:", error);
@@ -509,6 +616,18 @@ export default function App() {
             Settings & Clearance
           </button>
 
+          <button
+            onClick={() => setActiveTab("logs")}
+            className={`w-full text-left px-4 py-3 rounded-xl text-xs font-semibold flex items-center gap-3 transition ${
+              activeTab === "logs"
+                ? "bg-amber-500/10 text-amber-400 border-l-2 border-amber-500 shadow-sm"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/50"
+            }`}
+          >
+            <Activity size={16} />
+            System Integrity Logs
+          </button>
+
           <div className="mt-auto border-t border-slate-800/80 pt-4 px-3 space-y-2 mt-8">
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Enterprise Target</span>
             <div className="bg-slate-900/40 p-3 rounded-xl border border-slate-800/70 space-y-1 text-center shadow-3xs">
@@ -580,9 +699,12 @@ export default function App() {
             <CaseRegister
               cases={filteredCases}
               userRole={userProfile?.role || "user"}
+              userRights={userProfile?.rights || getDefaultRights(userProfile?.role || "user")}
               onSelectCase={(id) => setSelectedCaseId(id)}
               onEditCase={(c) => setEditingCase(c)}
               onDeleteCase={handleDeleteCase}
+              onBulkDelete={handleBulkDelete}
+              onBulkUpdateStatus={handleBulkUpdateStatus}
               onAddCase={handleAddCaseManual}
               onImportCases={handleImportMasterCases}
             />
@@ -600,6 +722,16 @@ export default function App() {
               onWipeDatabase={handleClearAllData}
               onLoadDemo={handleLoadDemoData}
               casesCount={filteredCases.length}
+              showToast={showToast}
+              showConfirm={triggerConfirm}
+            />
+          )}
+
+          {activeTab === "logs" && (
+            <LogsPanel
+              logs={actionLogs}
+              userRole={userProfile?.role || "user"}
+              onClearLogs={clearActionLogs}
               showToast={showToast}
               showConfirm={triggerConfirm}
             />

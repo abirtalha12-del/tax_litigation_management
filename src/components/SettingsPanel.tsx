@@ -13,12 +13,16 @@ import {
   RefreshCw,
   AlertTriangle
 } from "lucide-react";
-import { LitigationCase } from "../types";
+import { useMutation, convexClient } from "../lib/convex";
+import { api } from "../../convex/_generated/api";
+import { LitigationCase, getDefaultRights } from "../types";
+import { logAction } from "../utils/auditLogger";
+
 
 interface SettingsPanelProps {
   currentUser: { email: string; uid: string };
-  userProfile: { role: "owner" | "admin" | "user"; fullName: string };
-  onProfileUpdate: (profile: { role: "owner" | "admin" | "user"; fullName: string }) => void;
+  userProfile: { role: "owner" | "admin" | "user"; fullName: string; rights?: any };
+  onProfileUpdate: (profile: { role: "owner" | "admin" | "user"; fullName: string; rights?: any }) => void;
   onWipeDatabase: () => Promise<void>;
   onLoadDemo: () => Promise<void>;
   casesCount: number;
@@ -59,6 +63,31 @@ export default function SettingsPanel({
   const [selfName, setSelfName] = useState(userProfile.fullName);
   const [selfPassword, setSelfPassword] = useState("");
   const [selfSuccess, setSelfSuccess] = useState<string | null>(null);
+
+  // Selected user for custom rights and checkbox states
+  const [selectedUid, setSelectedUid] = useState<string>("");
+  const [rightsCanCreate, setRightsCanCreate] = useState(true);
+  const [rightsCanEdit, setRightsCanEdit] = useState(true);
+  const [rightsCanDelete, setRightsCanDelete] = useState(false);
+  const [rightsCanExport, setRightsCanExport] = useState(true);
+  const [rightsCanWipe, setRightsCanWipe] = useState(false);
+
+  // Convex mutation hook
+  const doUpdateRights = useMutation(api.users.updateUserRights);
+
+  useEffect(() => {
+    if (!selectedUid) return;
+    const target = accounts.find((a) => a.uid === selectedUid);
+    if (target) {
+      const currentRights = target.rights || getDefaultRights(target.role);
+      setRightsCanCreate(currentRights.canCreateDossier);
+      setRightsCanEdit(currentRights.canEditDossier);
+      setRightsCanDelete(currentRights.canDeleteDossier);
+      setRightsCanExport(currentRights.canExportReports);
+      setRightsCanWipe(currentRights.canWipeDatabase);
+    }
+  }, [selectedUid, accounts]);
+
 
   useEffect(() => {
     loadAccounts();
@@ -136,6 +165,12 @@ export default function SettingsPanel({
       });
 
       saveAccountsToStorage(updated);
+      logAction(
+        currentUser,
+        userProfile,
+        "CLEARANCE_UPDATE",
+        `Clearance role for user '${targetUser.fullName}' (Email: ${targetUser.email}) modified to [${targetRole.toUpperCase()}].`
+      );
 
       // If changing own profile, sync state with parent
       if (userId === currentUser.uid) {
@@ -163,6 +198,74 @@ export default function SettingsPanel({
     } else {
       performRoleChange();
     }
+  };
+
+  // Save the custom user rights decisions
+  const handleSaveRights = async () => {
+    if (userProfile.role !== "owner") {
+      showToast("Only the Owner has permission to modify detailed user rights.", "error");
+      return;
+    }
+
+    if (!selectedUid) {
+      showToast("Please select a counsel member to modify rights.", "error");
+      return;
+    }
+
+    const targetUser = accounts.find(a => a.uid === selectedUid);
+    if (!targetUser) return;
+
+    const rightsPayload = {
+      canCreateDossier: rightsCanCreate,
+      canEditDossier: rightsCanEdit,
+      canDeleteDossier: rightsCanDelete,
+      canExportReports: rightsCanExport,
+      canWipeDatabase: rightsCanWipe,
+    };
+
+    const updated = accounts.map((acc) => {
+      if (acc.uid === selectedUid) {
+        return { ...acc, rights: rightsPayload };
+      }
+      return acc;
+    });
+
+    saveAccountsToStorage(updated);
+    logAction(
+      currentUser,
+      userProfile,
+      "RIGHTS_UPDATE",
+      `Dynamic security clearance privileges updated for counsel: ${targetUser.fullName} (Email: ${targetUser.email}).`
+    );
+
+    // Sync state with parent if editing ourselves
+    if (selectedUid === currentUser.uid) {
+      onProfileUpdate({ ...userProfile, rights: rightsPayload });
+      try {
+        const stored = sessionStorage.getItem("mills_logged_in_user");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          parsed.profile.rights = rightsPayload;
+          sessionStorage.setItem("mills_logged_in_user", JSON.stringify(parsed));
+        }
+      } catch (err) {
+        console.warn("sessionStorage rights save failed in sandboxed mode:", err);
+      }
+    }
+
+    // Call Convex dynamic mutation if live client exists
+    try {
+      if (convexClient) {
+        await doUpdateRights({
+          uid: selectedUid,
+          rights: rightsPayload
+        });
+      }
+    } catch (err) {
+      console.warn("Convex rights mutation failed:", err);
+    }
+
+    showToast(`Access rights decision successfully saved for ${targetUser.fullName}.`, "success");
   };
 
   // Handle direct creation of new counsels/accounts
@@ -201,6 +304,12 @@ export default function SettingsPanel({
 
     const updatedList = [...accounts, newUser];
     saveAccountsToStorage(updatedList);
+    logAction(
+      currentUser,
+      userProfile,
+      "USER_CREATE",
+      `Authorized and generated a brand new security access level slot for user '${newUser.fullName}' (Email: ${newUser.email}, Clearance: ${newUser.role.toUpperCase()}).`
+    );
 
     setAddSuccess(`Counsel Seal successfully generated for: ${newUser.fullName}`);
     showToast(`Counsel Seal generated for ${newUser.fullName}`, "success");
@@ -235,6 +344,12 @@ export default function SettingsPanel({
       () => {
         const updated = accounts.filter(a => a.uid !== userId);
         saveAccountsToStorage(updated);
+        logAction(
+          currentUser,
+          userProfile,
+          "USER_DELETE",
+          `Permanently voided the credentials and access seal of user: ${target.fullName} (${target.email}, Role: ${target.role.toUpperCase()}).`
+        );
         showToast(`Access seal for ${target.fullName} has been voided.`, "success");
       },
       "That user will immediately lose access to the tax controversy portal."
@@ -483,6 +598,131 @@ export default function SettingsPanel({
               <p className="text-[9.5px] text-slate-500 leading-normal font-mono">
                 ★ Active security check: Total sealed legal credentials matching this container is {accounts.length}. Changes to role elevations persist instantly to browser sessions.
               </p>
+            </div>
+          )}
+
+          {/* USER RIGHTS decision form - ONLY visible to OWNER */}
+          {userProfile.role === "owner" && (
+            <div className="bg-[#090d16] border border-amber-500/10 rounded-2xl p-5 space-y-4">
+              <div className="flex items-center gap-2 text-white">
+                <Sliders className="text-amber-400" size={16} />
+                <h3 className="text-xs font-bold uppercase tracking-wider font-mono">
+                  Owner Panel: Custom Counsel Rights Decisions
+                </h3>
+              </div>
+
+              <p className="text-[10px] text-slate-400 leading-normal">
+                As the master administrative Owner, you have exclusive authorization to delegate or rescind granular application action rights of any individual counsel.
+              </p>
+
+              <div className="space-y-4">
+                {/* User selection dropdown */}
+                <div className="space-y-1">
+                  <label className="text-[9px] uppercase tracking-wider text-slate-400 font-mono font-bold block">
+                    Choose Counsel to Modify
+                  </label>
+                  <select
+                    value={selectedUid}
+                    onChange={(e) => setSelectedUid(e.target.value)}
+                    className="w-full bg-[#020617]/70 text-xs text-white border border-slate-800 rounded-lg p-2 focus:outline-hidden focus:ring-1 focus:ring-amber-500 [&>option]:bg-[#0f172a]"
+                  >
+                    <option value="">-- Click to Select Registered Counsel --</option>
+                    {accounts.map((user) => (
+                      <option key={user.uid} value={user.uid}>
+                        {user.fullName} ({user.email}) [{user.role.toUpperCase()}]
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {selectedUid && (
+                  <div className="bg-slate-950/40 p-4 border border-slate-800 rounded-xl space-y-3 animate-fade-in">
+                    <span className="text-[10px] font-bold text-amber-400 font-mono tracking-wider uppercase block">
+                      Fine-Tuned Permissions Form
+                    </span>
+
+                    <div className="space-y-2 text-xs">
+                      {/* 1. canCreateDossier */}
+                      <label className="flex items-center gap-2.5 text-slate-300 hover:text-white cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={rightsCanCreate}
+                          onChange={(e) => setRightsCanCreate(e.target.checked)}
+                          className="w-4 h-4 text-amber-500 bg-[#020617] border-slate-800 rounded focus:ring-0 checked:bg-amber-500"
+                        />
+                        <div>
+                          <span className="font-semibold block">Create and Register Dossiers</span>
+                          <span className="text-[9.5px] text-slate-500 font-normal leading-tight font-sans">Allow manual adding and filing of taxpayer directories.</span>
+                        </div>
+                      </label>
+
+                      {/* 2. canEditDossier */}
+                      <label className="flex items-center gap-2.5 text-slate-300 hover:text-white cursor-pointer select-none border-t border-slate-900 pt-2 block">
+                        <input
+                          type="checkbox"
+                          checked={rightsCanEdit}
+                          onChange={(e) => setRightsCanEdit(e.target.checked)}
+                          className="w-4 h-4 text-amber-500 bg-[#020617] border-slate-800 rounded focus:ring-0 checked:bg-amber-500"
+                        />
+                        <div>
+                          <span className="font-semibold block">Edit Records and Chronology</span>
+                          <span className="text-[9.5px] text-slate-500 font-normal leading-tight font-sans">Allow direct modifications of litigation outcome positioning and timeline events.</span>
+                        </div>
+                      </label>
+
+                      {/* 3. canDeleteDossier */}
+                      <label className="flex items-center gap-2.5 text-slate-300 hover:text-white cursor-pointer select-none border-t border-slate-900 pt-2 block">
+                        <input
+                          type="checkbox"
+                          checked={rightsCanDelete}
+                          onChange={(e) => setRightsCanDelete(e.target.checked)}
+                          className="w-4 h-4 text-amber-500 bg-[#020617] border-slate-800 rounded focus:ring-0 checked:bg-amber-500"
+                        />
+                        <div>
+                          <span className="font-semibold block">Delete and Purge Litigation Dossiers</span>
+                          <span className="text-[9.5px] text-slate-500 font-normal leading-tight font-sans text-rose-400/80">Allow permanently expunging dossiers from registers ledger.</span>
+                        </div>
+                      </label>
+
+                      {/* 4. canExportReports */}
+                      <label className="flex items-center gap-2.5 text-slate-300 hover:text-white cursor-pointer select-none border-t border-slate-900 pt-2 block">
+                        <input
+                          type="checkbox"
+                          checked={rightsCanExport}
+                          onChange={(e) => setRightsCanExport(e.target.checked)}
+                          className="w-4 h-4 text-amber-500 bg-[#020617] border-slate-800 rounded focus:ring-0 checked:bg-amber-500"
+                        />
+                        <div>
+                          <span className="font-semibold block">Export Word & Excel summaries</span>
+                          <span className="text-[9.5px] text-slate-500 font-normal leading-tight font-sans">Allow downloading court summaries and consolidated spreadsheets.</span>
+                        </div>
+                      </label>
+
+                      {/* 5. canWipeDatabase */}
+                      <label className="flex items-center gap-2.5 text-slate-300 hover:text-white cursor-pointer select-none border-t border-slate-900 pt-2 block">
+                        <input
+                          type="checkbox"
+                          checked={rightsCanWipe}
+                          onChange={(e) => setRightsCanWipe(e.target.checked)}
+                          className="w-4 h-4 text-amber-500 bg-[#020617] border-slate-800 rounded focus:ring-0 checked:bg-amber-500"
+                        />
+                        <div>
+                          <span className="font-semibold block">Database Reset & Import Wizard</span>
+                          <span className="text-[9.5px] text-slate-500 font-normal leading-tight font-sans font-sans text-amber-450/90">Allow loading entire test datasets or triggering complete database voids.</span>
+                        </div>
+                      </label>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleSaveRights}
+                      className="w-full bg-amber-500 hover:bg-amber-450 text-[#090d16] font-bold text-xs py-2 rounded-lg transition duration-200 cursor-pointer shadow-sm text-center font-sans tracking-wide"
+                    >
+                      Enforce Clearance Rights Decisions
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

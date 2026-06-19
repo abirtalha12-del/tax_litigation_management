@@ -70,3 +70,41 @@ export interface AnalysisResponse {
   chronology: CaseChronologyEvent[];
   validationIssues: string[];
 }
+
+export interface UserRights {
+  canCreateDossier: boolean;
+  canEditDossier: boolean;
+  canDeleteDossier: boolean;
+  canExportReports: boolean;
+  canWipeDatabase: boolean;
+}
+
+export function getDefaultRights(role: "owner" | "admin" | "user"): UserRights {
+  if (role === "owner") {
+    return {
+      canCreateDossier: true,
+      canEditDossier: true,
+      canDeleteDossier: true,
+      canExportReports: true,
+      canWipeDatabase: true,
+    };
+  }
+  if (role === "admin") {
+    return {
+      canCreateDossier: true,
+      canEditDossier: true,
+      canDeleteDossier: true,
+      canExportReports: true,
+      canWipeDatabase: false,
+    };
+  }
+  return {
+    canCreateDossier: true,
+    canEditDossier: true,
+    canDeleteDossier: false,
+    canExportReports: true,
+    canWipeDatabase: false,
+  };
+}
+
+

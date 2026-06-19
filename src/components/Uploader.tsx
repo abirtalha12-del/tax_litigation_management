@@ -7,66 +7,6 @@ interface UploaderProps {
   existingCases: LitigationCase[];
 }
 
-const SAMPLE_TEXTS = [
-  {
-    name: "FBR Notice Sec. 161 (Withholding Tax default)",
-    text: `GOVERNMENT OF PAKISTAN
-REVENUE DIVISION
-LARGE TAXPAYERS OFFICE (LTO), LAHORE
-No. LTO-WHT/2023/88921
-Dated: 2023-09-12
-
-SHOW CAUSE NOTICE UNDER SECTION 161 / 205
-OF THE INCOME TAX ORDINANCE, 2001
-
-To:
-M/S Style Textile Mills Ltd
-NTN: 2940182-4
-STRN: 0300294018211
-Address: 10-Kilometer, Multan Road, Lahore
-
-TAX PERIOD: Tax Year 2023
-
-WHEREAS on examination of your withholding tax statements and bank ledger accounts, it is observed that your company failed to deduct withholding tax on payments made to unregistered construction contractors for civil works on the weaving spinning unit during the period under tax year 2023. Total payments of Rs. 35,000,000 were released without deduction of 10% withholding tax.
-
-THEREFORE, you are hereby called upon to show cause as to why withholding tax of Rs. 3,500,000 (Rupees Three Million Five Hundred Thousand) shouldn't be recovered from you under section 161. Additionally, a penalty of 5% (Rs. 175,000) under Section 182 and default surcharge of Rs. 420,000 under Section 205 is also calculated. Total financial default exposure is Rs. 4,095,000.
-
-You are requested to reply by 2023-10-05. A personal hearing is scheduled on 2023-10-12 at Room 14, LTO, Lahore before the undersigned.
-
-(MOHAMMAD SAFDAR)
-Deputy Commissioner Inland Revenue (WHT)
-LTO Lahore`
-  },
-  {
-    name: "PRA Notice Sec. 11 (Punjab Service Sales Tax)",
-    text: `OFFICE OF THE DEPUTY COMMISSIONER
-PUNJAB REVENUE AUTHORITY (PRA)
-84-Abu Bakar Block, Garden Town, Lahore
-No. PRA-O-229/2024
-Dated: 2024-02-18
-
-NOTICE UNDER SECTION 11(2) OF THE PUNJAB SALES TAX ON SERVICES ACT 2012
-
-Subject: COMPLIANCE STATUS ON TEXTILE DYEING AND PRINTING TARIFFS
-
-Taxpayer Legal Identity:
-Chenab Weaving & Finishing Pvt Ltd
-NTN: 1482019-3
-STRN: 0309148201915
-Tax period: July 2023 to December 2023
-
-AND WHEREAS it is noticed that the taxpayer had imported certain textile chemicals and booked dyeing services from third parties under provincial zero-rated regimes without registering actual invoice inputs under the proper provincial HS Code 9815.4000. 
-
-IT IS APPARENT that a service sales tax on dyeing works is applicable at 16% on services worth Rs. 60,000,000, creating an unpaid sales tax service liability of Rs. 9,600,000. Default surcharge has been computed as Rs. 840,000 and penalty under section 48 is Rs. 480,000. Total exposure outstanding is Rs. 10,920,000.
-
-YOU ARE DIRECTED to reply to this show cause notice on or before 2024-03-05. A first hearing is fixed for 2024-03-12, followed by a second hearing on 2024-03-18. Failure to represent will attract recovery proceedings on banking channels.
-
-(AMARA KHAN)
-Deputy Commissioner (Audit)
-PRA Lahore`
-  }
-];
-
 export default function Uploader({ onCommitCase, existingCases }: UploaderProps) {
   const [file, setFile] = useState<File | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
@@ -150,7 +90,7 @@ export default function Uploader({ onCommitCase, existingCases }: UploaderProps)
     }
   };
 
-  const handleDrop = async (e: React.DragEvent) => {
+  const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
@@ -159,17 +99,27 @@ export default function Uploader({ onCommitCase, existingCases }: UploaderProps)
       setFile(droppedFile);
       setShowPastedBox(false);
       setRawPastedText("");
-      await analyzeSelectedFile(droppedFile);
+      setAnalysisResult(null);
+      setErrorMsg("");
+      setCommittedMsg("");
     }
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const selectedFile = e.target.files[0];
       setFile(selectedFile);
       setShowPastedBox(false);
       setRawPastedText("");
-      await analyzeSelectedFile(selectedFile);
+      setAnalysisResult(null);
+      setErrorMsg("");
+      setCommittedMsg("");
+    }
+  };
+
+  const triggerFileAnalysis = async () => {
+    if (file) {
+      await analyzeSelectedFile(file);
     }
   };
 
@@ -393,21 +343,25 @@ export default function Uploader({ onCommitCase, existingCases }: UploaderProps)
             </div>
           </div>
 
-          {/* Quick templates helper */}
-          <div className="bg-[#0f172a] rounded-2xl border border-slate-800/80 p-5 space-y-4">
-            <h3 className="text-xs font-bold uppercase tracking-widest text-slate-450">Or Paste Pakistani SCN Sample</h3>
-            <div className="flex flex-col gap-2">
-              {SAMPLE_TEXTS.map((sample, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => loadSampleText(sample.text)}
-                  className="w-full text-left p-3 rounded-xl border border-slate-800/80 bg-slate-950/40 hover:border-slate-700 hover:bg-slate-900 transition truncate text-xs font-semibold text-slate-305 flex items-center gap-2"
-                >
-                  <FileText size={14} className="text-slate-550 mr-1 shrink-0" />
-                  {sample.name}
-                </button>
-              ))}
-            </div>
+          {/* Paste manual content box */}
+          <div className="bg-[#0f172a] rounded-2xl border border-slate-800/80 p-5 space-y-3">
+            <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">Manual Text Entry</h3>
+            <p className="text-[10px] text-slate-450 leading-normal">
+              Directly input or paste raw notification text, tribunal order transcripts, or audit findings to analyze.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setRawPastedText("");
+                setShowPastedBox(true);
+                setFile(null);
+                setErrorMsg("");
+                setAnalysisResult(null);
+              }}
+              className="w-full py-2 px-4 bg-slate-950 border border-slate-800 rounded-xl hover:bg-slate-900 hover:border-slate-700 hover:text-amber-400 text-xs font-bold font-mono tracking-wide text-amber-500 transition cursor-pointer"
+            >
+              Paste Custom Text
+            </button>
           </div>
         </div>
 
@@ -487,7 +441,84 @@ export default function Uploader({ onCommitCase, existingCases }: UploaderProps)
             </div>
           )}
 
-          {!analysisResult && !analyzing && !committedMsg && !showPastedBox && (
+          {file && !analysisResult && !analyzing && !committedMsg && !showPastedBox && (
+            <div className="bg-[#0f172a] rounded-3xl p-8 border border-slate-800 shadow-xl space-y-6 flex flex-col justify-between min-h-[460px] animate-fade-in">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-amber-500/10 text-amber-500 rounded-xl border border-amber-500/20">
+                      <FileText size={20} />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-extrabold text-white">Staged Document</h4>
+                      <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Ready for extraction analysis</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setFile(null)}
+                    className="text-xs text-rose-450 hover:text-rose-400 font-semibold underline cursor-pointer hover:no-underline"
+                  >
+                    Clear File
+                  </button>
+                </div>
+
+                <div className="bg-[#020617]/55 border border-slate-850 rounded-2xl p-4 space-y-3">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-400">File Name:</span>
+                    <span className="text-slate-200 font-mono font-bold truncate max-w-[280px]" title={file.name}>{file.name}</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-400">Size:</span>
+                    <span className="text-slate-200 font-mono">{(file.size / 1024 / 1024).toFixed(3)} MB</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-400">Type:</span>
+                    <span className="text-slate-200 uppercase font-mono">{file.type || "unknown / external"}</span>
+                  </div>
+                </div>
+
+                <div className="space-y-2.5">
+                  <h5 className="text-[10px] font-bold text-slate-450 uppercase tracking-widest">Expected Extraction Scope</h5>
+                  <ul className="text-xs text-slate-350 space-y-2 pl-1 font-medium">
+                    <li className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                      Legal Identity, NTN & STRN identification
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                      Financial Audit exposure matrix calculation (demands, penalties, surcharges)
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                      Dynamic proceeding chronology & critical calendar dates
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                      Department vs taxpayer positions & current status
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="bg-[#091024]/60 border border-slate-800 p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="text-left">
+                  <span className="text-[10px] font-bold text-amber-500 uppercase tracking-widest font-mono">Confirmation Required</span>
+                  <p className="text-xs text-slate-350 mt-0.5">Initialize intelligent analysis scan via Gemini model layers.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={triggerFileAnalysis}
+                  className="w-full sm:w-auto bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold px-6 py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-md shadow-amber-500/10 shrink-0"
+                >
+                  <Sparkles size={14} />
+                  Analyze Document
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!file && !analysisResult && !analyzing && !committedMsg && !showPastedBox && (
             <div className="bg-[#0f172a] p-12 rounded-3xl border border-slate-800/80 shadow-3xs text-center flex flex-col items-center justify-center min-h-[460px] space-y-4">
               <div className="bg-slate-950 border border-slate-800 p-5 rounded-full text-slate-500 mb-2">
                 <FileText size={48} />
@@ -495,7 +526,7 @@ export default function Uploader({ onCommitCase, existingCases }: UploaderProps)
               <div className="max-w-sm space-y-2">
                 <h3 className="font-bold text-white text-base">Awaiting Litigation Document</h3>
                 <p className="text-xs text-slate-450 leading-relaxed font-medium">
-                  Drag a PDF/Image of the taxpayer notice, or select a sample textile taxpayer show cause notice on the left to start immediate litigation metrics aggregation.
+                  Drag and drop a PDF/Image of the taxpayer notice or use the custom text options on the left to initiate immediate metrics aggregation.
                 </p>
               </div>
             </div>

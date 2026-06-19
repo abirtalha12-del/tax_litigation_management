@@ -61,7 +61,16 @@ export default defineSchema({
     uid: v.string(),
     email: v.string(),
     fullName: v.string(),
-    role: v.string(), // "admin" | "user"
+    role: v.string(), // "admin" | "user" | "owner"
     createdAt: v.string(),
+    rights: v.optional(
+      v.object({
+        canCreateDossier: v.boolean(),
+        canEditDossier: v.boolean(),
+        canDeleteDossier: v.boolean(),
+        canExportReports: v.boolean(),
+        canWipeDatabase: v.boolean(),
+      })
+    ),
   }).index("by_uid", ["uid"]),
 });

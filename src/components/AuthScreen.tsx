@@ -4,7 +4,7 @@ import { api } from "../../convex/_generated/api";
 import { Landmark, Shield, Mail, Lock, User, UserCheck, AlertCircle } from "lucide-react";
 
 interface AuthScreenProps {
-  onAuthSuccess: (user: any, profile: { role: "owner" | "admin" | "user"; fullName: string }) => void;
+  onAuthSuccess: (user: any, profile: { role: "owner" | "admin" | "user"; fullName: string; rights?: any }) => void;
 }
 
 const getLocalAccounts = () => {
@@ -92,7 +92,7 @@ export default function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
       if (matched) {
         onAuthSuccess(
           { uid: matched.uid, email: matched.email },
-          { role: matched.role || "user", fullName: matched.fullName || "Counsel" }
+          { role: matched.role || "user", fullName: matched.fullName || "Counsel", rights: matched.rights }
         );
       } else {
         setError("Incorrect email or password. Please try again.");
